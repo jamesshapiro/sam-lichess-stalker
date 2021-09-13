@@ -1,0 +1,112 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  sam-lichess-stalker
+
+  Sample SAM Template for sam-lichess-stalker project
+
+Globals:
+  Function:
+    Timeout: 60
+
+Parameters:
+  LichessPersonalAccessToken:
+    Type: String
+    Description: The Lichess API Key
+    NoEcho: true
+  PlayerToMonitor:
+    Type: String
+    Description: Player to monitor
+    NoEcho: true
+  NotificationEmail:
+    Type: String
+    Description: Recipient e-mail address
+  NotificationPhone:
+    Type: String
+    Description: Recipient phone number
+
+Resources:
+  LichessStalkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/lichess-stalker/
+      Handler: api.lambda_handler
+      Runtime: python3.8
+      Policies:
+        - AmazonDynamoDBFullAccess
+        - AmazonSNSFullAccess
+      Layers:
+        - !Ref LichessLayer
+      Environment:
+        Variables:
+          LICHESS_PERSONAL_ACCESS_TOKEN: !Ref LichessPersonalAccessToken
+          PLAYER_TO_MONITOR: !Ref PlayerToMonitor
+          LICHESS_TABLE_NAME: !Ref DDBTable
+          PHONE_NUMBER: !Ref NotificationPhone
+      Events:
+        LichessStalker:
+          Type: Api
+          Properties:
+            Path: /stalk/
+            Method: get
+        PingPlayerScheduledEvent:
+          Type: Schedule
+          Properties:
+            Schedule: rate(1 minute)
+  
+  LichessStalkerFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName:
+        Fn::Join:
+          - ''
+          - - /aws/lambda/
+            - Ref: LichessStalkerFunction
+      RetentionInDays: 3
+  
+  LichessLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: LichessLayer
+      Description: Lichess Python SDK
+      ContentUri: src/
+      CompatibleRuntimes:
+        - python3.7
+        - python3.8
+      LicenseInfo: MIT
+      RetentionPolicy: Retain
+      
+  DDBTable:
+    Type: AWS::Serverless::SimpleTable
+  
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+      - Protocol: email
+        Endpoint: !Ref NotificationEmail
+
+  Alarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmActions:
+        - !Ref AlarmTopic
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref LichessStalkerFunction
+      EvaluationPeriods: 1
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Period: 60
+      Statistic: Sum
+      Threshold: '1'
+
+Outputs:
+  LichessLayer:
+    Value: !Ref LichessLayer
+    Description: ARN For AWS LichessLayer
+  LichessStalkerApi:
+    Description: "API Gateway endpoint URL for Prod stage for LichessStalker function"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/stalk/"
+    
